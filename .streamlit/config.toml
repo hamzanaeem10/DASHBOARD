@@ -1,0 +1,12 @@
+[theme]
+# Matches the chart surface in theme.py so the page and the plots agree.
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#fcfcfb"
+secondaryBackgroundColor = "#f2f1ed"
+textColor = "#0b0b0b"
+
+[server]
+# The workbook is ~20 MB; the default upload cap is 200 MB, which is fine,
+# but be explicit so a bigger export does not fail mysteriously.
+maxUploadSize = 300

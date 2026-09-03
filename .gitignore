@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.streamlit/secrets.toml
+*.log
+
+# The client's actual ticket workbook - real bank/company names and SLA
+# records. Never commit this; point TICKETS_XLSX at your own local copy
+# or upload it through the sidebar instead.
+*.xlsx
+!sample_data/*.xlsx
