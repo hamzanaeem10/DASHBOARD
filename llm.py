@@ -18,7 +18,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 MAX_TOKENS = 8000
