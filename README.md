@@ -76,6 +76,41 @@ Opens on <http://localhost:8501>.
 
 ---
 
+## Deploying (Streamlit Community Cloud)
+
+This app is a stateful Streamlit server — it needs a persistent process holding
+a live connection per session, not a request/response function — so it cannot
+run on a serverless platform (Vercel, Netlify, AWS Lambda). Streamlit Community
+Cloud is free and built for exactly this.
+
+1. Push this repo to GitHub (already done if you're reading this from
+   `github.com/hamzanaeem10/DASHBOARD`).
+2. Go to <https://share.streamlit.io>, sign in with GitHub, click
+   **New app**, and pick this repo, the `main` branch, and `app.py`.
+3. Before it starts, open **Advanced settings → Secrets** and paste:
+
+   ```toml
+   LLM_PROVIDER = "groq"
+   GROQ_API_KEY = "gsk_..."
+   GROQ_MODEL = "openai/gpt-oss-120b"
+   ```
+
+   Community Cloud exposes every key here as an environment variable, so no
+   code change is needed — this fills the same role as your local `.env`.
+4. Click **Deploy**. First boot installs `requirements.txt` and takes a
+   couple of minutes; later visits are fast.
+
+**The ticket workbook is not in the repo** — it's gitignored on purpose, since
+it's the client's real data (bank names, SLA records). A freshly deployed
+instance has no data loaded; upload the `.xlsx` through the sidebar on first
+visit each time the app boots. There's no persistence between sessions
+(consistent with the "no database" scope of this MVP), so if you want a demo
+that already has data loaded when someone opens the link, that's a deliberate
+tradeoff to revisit — e.g., a private deployment with the file bundled, kept
+out of the public repo.
+
+---
+
 ## Files
 
 | File | Role |

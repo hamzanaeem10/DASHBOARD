@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import streamlit as st
 
@@ -12,11 +14,16 @@ import llm
 # is looping, so we stop and say so rather than spending the user's quota.
 MAX_ITERATIONS = 8
 
+USER_AVATAR = "🧑"
+ASSISTANT_AVATAR = "📡"
+
+# (question, one-line hint) - the hint sets expectation for what kind of answer
+# is coming, so the demo reads as intentional rather than a random pick.
 EXAMPLE_QUESTIONS = [
-    "Which vendor has the worst average downtime?",
-    "Show me ticket volume trend by month",
-    "What's our SLA compliance rate?",
-    "Compare FCR rate across zones",
+    ("Which vendor has the worst average downtime?", "🏆 ranking"),
+    ("Show me ticket volume trend by month", "📈 trend"),
+    ("What's our SLA compliance rate?", "🎯 headline number"),
+    ("Compare FCR rate across zones", "📊 comparison"),
 ]
 
 
@@ -41,18 +48,36 @@ def _render_artifact(artifact: dict, key: str) -> None:
         st.metric(artifact["label"], artifact["value"], delta=artifact.get("delta"))
 
 
+def _render_message(message: dict, m_index: int) -> None:
+    """Draw one message, including any charts/KPIs and a query/timing footer."""
+    avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
+    with st.chat_message(message["role"], avatar=avatar):
+        for a_index, artifact in enumerate(message.get("artifacts", [])):
+            _render_artifact(artifact, key=f"artifact_{m_index}_{a_index}")
+        if message.get("text"):
+            st.markdown(message["text"])
+
+        sql = message.get("sql")
+        elapsed = message.get("elapsed_s")
+        if sql or elapsed:
+            footer = st.container()
+            cols = footer.columns([3, 1])
+            if sql:
+                with cols[0]:
+                    label = f"🔎 {len(sql)} quer{'y' if len(sql) == 1 else 'ies'} run"
+                    with st.expander(label):
+                        for i, query in enumerate(sql, 1):
+                            if len(sql) > 1:
+                                st.caption(f"Query {i}")
+                            st.code(query, language="sql")
+            if elapsed:
+                cols[-1].caption(f"⏱ {elapsed:.1f}s")
+
+
 def _render_log() -> None:
     """Replay the conversation, including the charts each answer produced."""
     for m_index, message in enumerate(st.session_state.chat_log):
-        with st.chat_message(message["role"]):
-            for a_index, artifact in enumerate(message.get("artifacts", [])):
-                _render_artifact(artifact, key=f"artifact_{m_index}_{a_index}")
-            if message.get("text"):
-                st.markdown(message["text"])
-            if message.get("sql"):
-                with st.expander(f"SQL ({len(message['sql'])} queries)"):
-                    for query in message["sql"]:
-                        st.code(query, language="sql")
+        _render_message(message, m_index)
 
 
 def _run_agent(provider, df: pd.DataFrame, con, question: str) -> dict:
@@ -70,29 +95,28 @@ def _run_agent(provider, df: pd.DataFrame, con, question: str) -> dict:
     artifacts: list[dict] = []
     executed_sql: list[str] = []
     status_area = st.empty()
+    started = time.monotonic()
+
+    def _finish(text: str) -> dict:
+        status_area.empty()
+        return {
+            "role": "assistant",
+            "text": text,
+            "artifacts": artifacts,
+            "sql": executed_sql,
+            "elapsed_s": time.monotonic() - started,
+        }
 
     for iteration in range(MAX_ITERATIONS):
         try:
             turn = provider.call(history, agent_tools.TOOLS, system_prompt)
         except Exception as exc:
-            status_area.empty()
-            return {
-                "role": "assistant",
-                "text": f"The model call failed: `{type(exc).__name__}: {exc}`",
-                "artifacts": artifacts,
-                "sql": executed_sql,
-            }
+            return _finish(f"⚠️ The model call failed: `{type(exc).__name__}: {exc}`")
 
         provider.append_assistant(history, turn)
 
         if not turn.wants_tools:
-            status_area.empty()
-            return {
-                "role": "assistant",
-                "text": turn.text or "_(no answer returned)_",
-                "artifacts": artifacts,
-                "sql": executed_sql,
-            }
+            return _finish(turn.text or "_(no answer returned)_")
 
         # Execute every tool the model asked for this turn.
         results = []
@@ -101,9 +125,11 @@ def _run_agent(provider, df: pd.DataFrame, con, question: str) -> dict:
                 sql = str(call.arguments.get("sql", "")).strip()
                 if sql:
                     executed_sql.append(sql)
-                status_area.caption(f"Querying the data… (step {iteration + 1})")
+                status_area.caption(f"🔎 Querying the data… (step {iteration + 1})")
+            elif call.name == "render_chart":
+                status_area.caption("📊 Building the chart…")
             else:
-                status_area.caption(f"Building the {call.name.split('_')[-1]}…")
+                status_area.caption("🧮 Computing the headline number…")
 
             content, is_error = agent_tools.execute_tool(
                 call.name, call.arguments, con, artifacts
@@ -112,16 +138,28 @@ def _run_agent(provider, df: pd.DataFrame, con, question: str) -> dict:
 
         provider.append_tool_results(history, results)
 
-    status_area.empty()
-    return {
-        "role": "assistant",
-        "text": (
-            f"I stopped after {MAX_ITERATIONS} tool calls without settling on an "
-            "answer. Try narrowing the question."
-        ),
-        "artifacts": artifacts,
-        "sql": executed_sql,
-    }
+    return _finish(
+        f"I stopped after {MAX_ITERATIONS} tool calls without settling on an "
+        "answer. Try narrowing the question."
+    )
+
+
+def _render_empty_state(provider_label: str) -> None:
+    """Welcome card shown before the first message - sets up the demo flow."""
+    with st.container(border=True):
+        st.markdown("**Ask a question in plain English — I'll write the SQL.**")
+        st.caption(
+            f"Powered by {provider_label}, querying live over the full dataset "
+            "with DuckDB. Try one of these, or type your own below."
+        )
+        top = st.columns(2, gap="small")
+        bottom = st.columns(2, gap="small")
+        for column, (question, hint) in zip(top + bottom, EXAMPLE_QUESTIONS):
+            with column:
+                if st.button(question, width="stretch", key=f"eg_{question}"):
+                    st.session_state.pending_question = question
+                    st.rerun(scope="fragment")
+                st.caption(hint)
 
 
 @st.fragment
@@ -144,23 +182,18 @@ def render(df: pd.DataFrame, con) -> None:
         st.caption(
             f"Answers come from live SQL over all {len(df):,} tickets — the "
             "sidebar filters apply to the Dashboard tab only. Ask for a "
-            "filtered slice in your question instead."
+            "filtered slice in your question instead, e.g. \"…in the Central zone\"."
         )
     with reset:
-        if st.button("Clear chat", width="stretch"):
+        if st.button("🗑️ Clear", width="stretch", disabled=not st.session_state.chat_log):
             st.session_state.chat_log = []
             st.session_state.llm_history = None
             st.rerun(scope="fragment")
 
     _render_log()
 
-    # Example prompts, to get a demo moving quickly.
     if not st.session_state.chat_log:
-        st.write("**Try one of these:**")
-        for column, question in zip(st.columns(len(EXAMPLE_QUESTIONS)), EXAMPLE_QUESTIONS):
-            if column.button(question, width="stretch", key=f"eg_{question}"):
-                st.session_state.pending_question = question
-                st.rerun(scope="fragment")
+        _render_empty_state(provider.label)
 
     typed = st.chat_input("Ask a question about the tickets…")
     question = typed or st.session_state.pending_question
@@ -169,11 +202,11 @@ def render(df: pd.DataFrame, con) -> None:
     if not question:
         return
 
-    st.session_state.chat_log.append({"role": "user", "text": question})
-    with st.chat_message("user"):
-        st.markdown(question)
+    user_message = {"role": "user", "text": question}
+    st.session_state.chat_log.append(user_message)
+    _render_message(user_message, len(st.session_state.chat_log) - 1)
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         with st.spinner(f"Thinking with {provider.label}…"):
             message = _run_agent(provider, df, con, question)
 
