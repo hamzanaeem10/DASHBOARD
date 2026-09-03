@@ -27,6 +27,23 @@ EXAMPLE_QUESTIONS = [
 ]
 
 
+def _safe_rerun() -> None:
+    """Rerun just this fragment - falling back to a full rerun if Streamlit
+    doesn't consider the current execution a fragment-scoped rerun.
+
+    Streamlit only allows scope="fragment" while already inside a rerun that
+    it tracks as fragment-triggered (e.g. a widget inside this @st.fragment
+    changing) - never during a full script run, even from fragment code. The
+    normal chat flow always qualifies, but a full-app rerun triggered from
+    elsewhere (a dashboard filter, a fresh page load) would not, so this
+    falls back instead of crashing the whole chat on that edge case.
+    """
+    try:
+        st.rerun(scope="fragment")
+    except st.errors.StreamlitAPIException:
+        st.rerun()
+
+
 def _init_state() -> None:
     st.session_state.setdefault("chat_log", [])       # what is displayed
     st.session_state.setdefault("llm_history", None)  # provider-native history
@@ -158,7 +175,7 @@ def _render_empty_state(provider_label: str) -> None:
             with column:
                 if st.button(question, width="stretch", key=f"eg_{question}"):
                     st.session_state.pending_question = question
-                    st.rerun(scope="fragment")
+                    _safe_rerun()
                 st.caption(hint)
 
 
@@ -188,7 +205,7 @@ def render(df: pd.DataFrame, con) -> None:
         if st.button("🗑️ Clear", width="stretch", disabled=not st.session_state.chat_log):
             st.session_state.chat_log = []
             st.session_state.llm_history = None
-            st.rerun(scope="fragment")
+            _safe_rerun()
 
     _render_log()
 
@@ -213,4 +230,4 @@ def render(df: pd.DataFrame, con) -> None:
     st.session_state.chat_log.append(message)
     # Re-run so the new answer renders through the same path as the history,
     # which keeps the plotly chart keys stable.
-    st.rerun(scope="fragment")
+    _safe_rerun()

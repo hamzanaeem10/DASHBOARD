@@ -24,6 +24,28 @@ DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 8000
 
 
+def _config(name: str) -> str | None:
+    """Read a config value from the environment, falling back to st.secrets.
+
+    Locally this comes from `.env` via python-dotenv, which populates
+    os.environ - that's all this needs. On Streamlit Community Cloud, secrets
+    pasted into Settings -> Secrets are documented to also mirror into
+    os.environ, but relying on that mirroring alone is one more thing that can
+    silently fail to line up (a typo in the key name, a reboot not yet
+    applied, a future platform change) - reading st.secrets directly here
+    removes that as a point of failure.
+    """
+    value = os.environ.get(name)
+    if value:
+        return value
+    try:
+        import streamlit as st
+        value = st.secrets.get(name)
+        return str(value) if value else None
+    except Exception:
+        return None
+
+
 @dataclass
 class ToolCall:
     """One tool invocation, normalised across providers."""
@@ -63,7 +85,7 @@ class GroqProvider:
             raise ProviderError(
                 "The `groq` package is not installed. Run: pip install groq"
             ) from exc
-        self.model = model or os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+        self.model = model or _config("GROQ_MODEL") or DEFAULT_GROQ_MODEL
         # Groq's free tier caps tokens-per-minute; let the SDK back off and
         # retry a 429 rather than surfacing it as a failed answer mid-demo.
         self._client = Groq(api_key=api_key, max_retries=5, timeout=120.0)
@@ -152,7 +174,7 @@ class AnthropicProvider:
             raise ProviderError(
                 "The `anthropic` package is not installed. Run: pip install anthropic"
             ) from exc
-        self.model = model or os.environ.get("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
+        self.model = model or _config("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL
         # A bare client also resolves an `ant auth login` profile, so only pass
         # the key when we actually have one.
         self._client = (
@@ -208,14 +230,17 @@ def resolve_provider():
 
     Returns the provider, or raises ProviderError with a message the UI can show.
     """
-    requested = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
-    groq_key = os.environ.get("GROQ_API_KEY")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    requested = (_config("LLM_PROVIDER") or "").strip().lower()
+    groq_key = _config("GROQ_API_KEY")
+    anthropic_key = _config("ANTHROPIC_API_KEY")
 
     if requested == "groq" or (not requested and groq_key):
         if not groq_key:
             raise ProviderError(
-                "LLM_PROVIDER=groq but GROQ_API_KEY is not set. Add it to your .env file."
+                "LLM_PROVIDER=groq but GROQ_API_KEY is not set. Add it to "
+                "your .env file locally, or Settings -> Secrets on Streamlit "
+                "Community Cloud (then reboot the app - saving secrets alone "
+                "does not restart it)."
             )
         return GroqProvider(groq_key)
 
@@ -223,6 +248,9 @@ def resolve_provider():
         return AnthropicProvider(anthropic_key)
 
     raise ProviderError(
-        "No API key found. Set GROQ_API_KEY (or ANTHROPIC_API_KEY) in a .env "
-        "file next to app.py, then restart the app."
+        "No API key found. Locally: set GROQ_API_KEY (or ANTHROPIC_API_KEY) "
+        "in a .env file next to app.py, then restart the app. On Streamlit "
+        "Community Cloud: open the app's Settings -> Secrets, paste "
+        "GROQ_API_KEY = \"...\" (TOML format), save, then click Reboot app - "
+        "secrets only take effect after a reboot, not just a save."
     )
